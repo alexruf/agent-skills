@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+
+if ! command -v shellcheck >/dev/null 2>&1; then
+  echo "shellcheck is required but not installed" >&2
+  echo "Install it via your package manager (e.g. brew install shellcheck)" >&2
+  exit 1
+fi
+
+is_shell_script() {
+  local file="$1"
+  case "$file" in
+    *.sh|*.bash) return 0 ;;
+  esac
+  local first_line
+  IFS= read -r first_line < "$file" || return 1
+  case "$first_line" in
+    '#!'*/bash|'#!'*/bash\ *) return 0 ;;
+    '#!'*/sh|'#!'*/sh\ *) return 0 ;;
+    '#!/usr/bin/env bash'|'#!/usr/bin/env bash '*) return 0 ;;
+    '#!/usr/bin/env sh'|'#!/usr/bin/env sh '*) return 0 ;;
+  esac
+  return 1
+}
+
+files=()
+while IFS= read -r -d '' candidate; do
+  is_shell_script "$candidate" || continue
+  files+=("$candidate")
+done < <(
+  find "$repo_root/tools" "$repo_root/skills" \
+    -type f \
+    -not -path '*/assets/*' \
+    -not -path '*/references/*' \
+    -not -path '*/.*' \
+    -print0
+)
+
+if [ "${#files[@]}" -eq 0 ]; then
+  echo "No shell scripts found"
+  exit 0
+fi
+
+echo "Checking ${#files[@]} file(s):"
+for file in "${files[@]}"; do
+  echo "  ${file#"$repo_root"/}"
+done
+
+shellcheck \
+  --source-path="$repo_root/tools" \
+  --external-sources \
+  "${files[@]}"
+
+echo "checks passed"

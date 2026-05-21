@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage: tools/sync-agent-skills [options]
+
+Symlink valid skill directories from this repository into local agent skill paths.
+
+Options:
+  --source PATH   Source skills directory. Defaults to ./skills in this repo.
+  --target PATH   Target skill directory. Can be repeated.
+  --dry-run       Print actions without changing the filesystem.
+  -h, --help      Show this help.
+
+Default targets:
+  $HOME/.claude/skills
+  $HOME/.agents/skills
+USAGE
+}
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+# shellcheck source=lib/skills.sh
+. "$repo_root/tools/lib/skills.sh"
+
+source_dir="$repo_root/skills"
+dry_run=0
+targets=()
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --source)
+      [ "$#" -ge 2 ] || {
+        echo "Missing value for --source" >&2
+        exit 2
+      }
+      source_dir="$2"
+      shift 2
+      ;;
+    --target)
+      [ "$#" -ge 2 ] || {
+        echo "Missing value for --target" >&2
+        exit 2
+      }
+      targets+=("$2")
+      shift 2
+      ;;
+    --dry-run)
+      dry_run=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+if [ ! -d "$source_dir" ]; then
+  echo "Source directory does not exist: $source_dir" >&2
+  exit 1
+fi
+
+if [ "${#targets[@]}" -eq 0 ]; then
+  while IFS= read -r target; do
+    targets+=("$target")
+  done < <(default_skill_targets)
+fi
+
+sync_one() {
+  local skill_dir="$1"
+  local target_dir="$2"
+  local name="$3"
+  local dest="$target_dir/$name"
+
+  if [ -e "$dest" ] && [ ! -L "$dest" ]; then
+    echo "Refusing to overwrite non-symlink target: $dest" >&2
+    return 1
+  fi
+
+  if [ "$dry_run" -eq 1 ]; then
+    echo "link $dest -> $skill_dir"
+    return 0
+  fi
+
+  mkdir -p "$target_dir"
+  ln -sfn "$skill_dir" "$dest"
+  echo "linked $dest -> $skill_dir"
+}
+
+found=0
+for skill_dir in "$source_dir"/*; do
+  is_syncable_skill "$skill_dir" || continue
+  found=1
+  skill_name="$(basename "$skill_dir")"
+
+  for target_dir in "${targets[@]}"; do
+    sync_one "$skill_dir" "$target_dir" "$skill_name"
+  done
+done
+
+if [ "$found" -eq 0 ]; then
+  echo "No syncable skills found in $source_dir"
+fi
