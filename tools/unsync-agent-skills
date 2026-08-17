@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'USAGE'
-Usage: tools/unsync-agent-skills [options]
+Usage: tools/unsync-agent-skills [options] [SKILL ...]
 
 Remove symlinks created from this repository in local agent skill paths.
 
@@ -14,7 +14,11 @@ Options:
   --prune-dangling   Also remove dangling symlinks whose raw target ends in
                      /skills/<skill-name> for a current skill. Useful after
                      moving the repository.
+  --all              Select every syncable skill for non-interactive use.
   -h, --help         Show this help.
+
+SKILL may be repeated. Without SKILL or --all, an interactive terminal prompts
+for a selection. Non-interactive callers must provide SKILL or --all.
 
 Default targets:
   $HOME/.claude/skills
@@ -29,7 +33,9 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 source_dir="$repo_root/skills"
 dry_run=0
 prune_dangling=0
+select_all=0
 targets=()
+skill_names=()
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -57,14 +63,29 @@ while [ "$#" -gt 0 ]; do
       prune_dangling=1
       shift
       ;;
+    --all)
+      select_all=1
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
       ;;
-    *)
+    --)
+      shift
+      while [ "$#" -gt 0 ]; do
+        skill_names+=("$1")
+        shift
+      done
+      ;;
+    -*)
       echo "Unknown option: $1" >&2
       usage >&2
       exit 2
+      ;;
+    *)
+      skill_names+=("$1")
+      shift
       ;;
   esac
 done
@@ -78,6 +99,22 @@ if [ "${#targets[@]}" -eq 0 ]; then
   while IFS= read -r target; do
     targets+=("$target")
   done < <(default_skill_targets)
+fi
+
+interactive=0
+[ -t 0 ] && interactive=1
+
+if selection_output="$(resolve_skill_selection "$source_dir" "$select_all" "$interactive" "${skill_names[@]}")"; then
+  :
+else
+  exit $?
+fi
+
+selected_skills=()
+if [ -n "$selection_output" ]; then
+  while IFS= read -r skill_dir; do
+    selected_skills+=("$skill_dir")
+  done <<< "$selection_output"
 fi
 
 canonical_dir() {
@@ -151,8 +188,7 @@ unsync_one() {
 
 declare -A warned_targets=()
 found=0
-for skill_dir in "$source_dir"/*; do
-  is_syncable_skill "$skill_dir" || continue
+for skill_dir in "${selected_skills[@]}"; do
   found=1
   skill_name="$(basename "$skill_dir")"
   source_real="$(canonical_dir "$skill_dir")"

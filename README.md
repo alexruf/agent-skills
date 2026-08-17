@@ -41,18 +41,33 @@ Create a skill from the template:
 cp -R skills/_template skills/my-skill
 ```
 
-Edit `skills/my-skill/SKILL.md`, then link repository skills into the local
-agent-specific skill directories:
+Edit `skills/my-skill/SKILL.md`, then choose skills interactively to link them
+into the local agent-specific skill directories:
 
 ```sh
 tools/sync-agent-skills
 ```
 
-Remove only the links that point back to this repository:
+Select a subset explicitly for scripts:
+
+```sh
+tools/sync-agent-skills code-review diagnose
+```
+
+Use `--all` for unattended bulk sync:
+
+```sh
+tools/sync-agent-skills --all
+```
+
+Remove only selected links that point back to this repository:
 
 ```sh
 tools/unsync-agent-skills
 ```
+
+With no skill names or `--all`, non-terminal invocations fail instead of
+silently syncing every skill.
 
 ## Development
 
@@ -80,5 +95,7 @@ on macOS).
 ## Next Steps
 
 1. Create the first real skill from `skills/_template/`.
-2. Run `tools/sync-agent-skills --dry-run` to inspect target links.
-3. Run `tools/sync-agent-skills` to expose skills to supported local agents.
+2. Run `tools/sync-agent-skills --dry-run code-review diagnose` to inspect a
+   selected subset of target links.
+3. Run `tools/sync-agent-skills` in a terminal to choose skills interactively.
+4. Run `tools/sync-agent-skills --all` for unattended bulk sync.

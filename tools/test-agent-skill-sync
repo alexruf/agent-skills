@@ -1,0 +1,139 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+fixture="$(mktemp -d)"
+trap 'rm -rf "$fixture"' EXIT
+
+fail() {
+  echo "FAIL: $*" >&2
+  exit 1
+}
+
+assert_link() {
+  local path="$1"
+  local expected_target="$2"
+
+  [ -L "$path" ] || fail "expected symlink: $path"
+  [ "$(readlink "$path")" = "$expected_target" ] || \
+    fail "unexpected target for $path: $(readlink "$path")"
+}
+
+assert_absent() {
+  local path="$1"
+
+  [ ! -e "$path" ] && [ ! -L "$path" ] || fail "expected absent path: $path"
+}
+
+assert_equals() {
+  local expected="$1"
+  local actual="$2"
+  local description="$3"
+
+  [ "$actual" = "$expected" ] || fail "$description"
+}
+
+assert_status() {
+  local expected="$1"
+  local actual="$2"
+  local description="$3"
+
+  [ "$actual" -eq "$expected" ] || fail "$description: expected $expected, got $actual"
+}
+
+run_expect_failure() {
+  local expected_status="$1"
+  shift
+
+  set +e
+  command_output="$("$@" 2>&1)"
+  command_status=$?
+  set -e
+  assert_status "$expected_status" "$command_status" "unexpected command status"
+}
+
+source_dir="$fixture/source"
+newline_skill_name=$'line\nbreak'
+newline_skill="$source_dir/$newline_skill_name"
+mkdir -p "$source_dir/alpha" "$source_dir/beta" "$source_dir/_template" "$newline_skill"
+touch "$source_dir/alpha/SKILL.md" "$source_dir/beta/SKILL.md" "$source_dir/_template/SKILL.md" "$newline_skill/SKILL.md"
+
+selected_target="$fixture/selected-target"
+"$repo_root/tools/sync-agent-skills" --source "$source_dir" --target "$selected_target" alpha beta </dev/null
+assert_link "$selected_target/alpha" "$source_dir/alpha"
+assert_link "$selected_target/beta" "$source_dir/beta"
+assert_absent "$selected_target/_template"
+
+"$repo_root/tools/unsync-agent-skills" --source "$source_dir" --target "$selected_target" alpha </dev/null
+assert_absent "$selected_target/alpha"
+assert_link "$selected_target/beta" "$source_dir/beta"
+
+all_target="$fixture/all-target"
+"$repo_root/tools/sync-agent-skills" --source "$source_dir" --target "$all_target" --all </dev/null
+assert_link "$all_target/alpha" "$source_dir/alpha"
+assert_link "$all_target/beta" "$source_dir/beta"
+assert_absent "$all_target/_template"
+assert_absent "$all_target/$newline_skill_name"
+
+run_expect_failure 2 "$repo_root/tools/sync-agent-skills" --source "$source_dir" --target "$fixture/newline-target" "$newline_skill_name"
+assert_equals "Unknown or unsyncable skill: $newline_skill_name" "$command_output" 'newline skill was accepted'
+assert_absent "$fixture/newline-target/$newline_skill_name"
+
+run_expect_failure 2 "$repo_root/tools/sync-agent-skills" --source "$source_dir" --target "$fixture/conflict-target" --all alpha
+assert_equals '--all cannot be combined with skill names.' "$command_output" 'unexpected --all conflict diagnostic'
+assert_absent "$fixture/conflict-target/alpha"
+
+run_expect_failure 2 "$repo_root/tools/sync-agent-skills" --source "$source_dir" --target "$fixture/invalid-sync-target" alpha missing
+assert_equals 'Unknown or unsyncable skill: missing' "$command_output" 'unexpected invalid skill diagnostic'
+assert_absent "$fixture/invalid-sync-target/alpha"
+
+run_expect_failure 2 "$repo_root/tools/unsync-agent-skills" --source "$source_dir" --target "$all_target" alpha _template
+assert_equals 'Unknown or unsyncable skill: _template' "$command_output" 'unexpected unsyncable skill diagnostic'
+assert_link "$all_target/alpha" "$source_dir/alpha"
+
+run_expect_failure 2 "$repo_root/tools/sync-agent-skills" --source "$source_dir" --target "$fixture/noninteractive-target"
+assert_equals 'No skill selection supplied; pass --all or one or more skill names.' "$command_output" 'unexpected non-interactive diagnostic'
+assert_absent "$fixture/noninteractive-target/alpha"
+
+dry_run_target="$fixture/dry-run-target"
+dry_run_output="$("$repo_root/tools/sync-agent-skills" --source "$source_dir" --target "$dry_run_target" --dry-run alpha </dev/null)"
+assert_equals "link $dry_run_target/alpha -> $source_dir/alpha" "$dry_run_output" 'dry-run selected unexpected skills'
+assert_absent "$dry_run_target/alpha"
+assert_absent "$dry_run_target/beta"
+
+# shellcheck source=lib/skills.sh
+. "$repo_root/tools/lib/skills.sh"
+expected_all="$(printf '%s\n' "$source_dir/alpha" "$source_dir/beta")"
+
+selection="$(resolve_skill_selection "$source_dir" 0 1 <<< 'all')"
+assert_equals "$expected_all" "$selection" 'all selection did not preserve alphabetical order'
+
+selection="$(resolve_skill_selection "$source_dir" 0 1 <<< '2 1')"
+assert_equals "$(printf '%s\n' "$source_dir/beta" "$source_dir/alpha")" "$selection" 'numeric selection did not preserve entered order'
+
+selection="$(resolve_skill_selection "$source_dir" 0 1 <<< 'beta alpha')"
+assert_equals "$(printf '%s\n' "$source_dir/beta" "$source_dir/alpha")" "$selection" 'name selection did not preserve entered order'
+
+selection="$(resolve_skill_selection "$source_dir" 0 1 <<< '2 alpha')"
+assert_equals "$(printf '%s\n' "$source_dir/beta" "$source_dir/alpha")" "$selection" 'mixed selection did not preserve entered order'
+
+selection="$(resolve_skill_selection "$source_dir" 0 1 <<< 'alpha 1 alpha')"
+assert_equals "$source_dir/alpha" "$selection" 'duplicate selection was not deduplicated'
+
+selection="$(resolve_skill_selection "$source_dir" 0 1 <<< $'\nalpha')"
+assert_equals "$source_dir/alpha" "$selection" 'blank input did not reprompt'
+
+selection="$(resolve_skill_selection "$source_dir" 0 1 <<< $'gamma\nbeta')"
+assert_equals "$source_dir/beta" "$selection" 'invalid input did not reprompt'
+
+selection="$(resolve_skill_selection "$source_dir" 0 1 <<< $'all alpha\nbeta')"
+assert_equals "$source_dir/beta" "$selection" 'mixed all input did not reprompt'
+
+set +e
+selection="$(resolve_skill_selection "$source_dir" 0 1 < /dev/null)"
+selection_status=$?
+set -e
+assert_status 1 "$selection_status" 'EOF did not cancel selection'
+assert_equals '' "$selection" 'EOF selection returned paths'
+
+echo "agent skill sync tests passed"

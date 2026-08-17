@@ -38,12 +38,27 @@ workflow simple and avoids checking generated agent-specific links into git.
 
 ## Repository Strategy
 
-Keep canonical skills in `skills/<skill-name>/` and create symlinks into each
-agent's personal skill directory:
+Keep canonical skills in `skills/<skill-name>/` and choose skills interactively
+when running in a terminal:
 
 ```sh
 tools/sync-agent-skills
 ```
+
+For a named subset, pass skill directory names positionally:
+
+```sh
+tools/sync-agent-skills code-review diagnose
+```
+
+Use `--all` for unattended bulk sync:
+
+```sh
+tools/sync-agent-skills --all
+```
+
+Without skill names or `--all`, a non-terminal invocation fails instead of
+silently processing every skill.
 
 The script links each skill directory individually. This keeps the agent-specific
 parent directories as real directories, which is more conservative than replacing
@@ -67,6 +82,12 @@ Use `--target` for additional or older discovery paths:
 tools/sync-agent-skills --target "$HOME/.claude/skills" --target "$HOME/.agents/skills"
 ```
 
+For unattended custom-target sync, add `--all`:
+
+```sh
+tools/sync-agent-skills --target "$HOME/.claude/skills" --target "$HOME/.agents/skills" --all
+```
+
 Avoid syncing the same skill set to both `~/.agents/skills` and
 `~/.pi/agent/skills` unless you intentionally want duplicate Pi discovery paths.
 Pi warns on name collisions and keeps the first skill it finds.
@@ -75,10 +96,10 @@ The same principle applies to agents that already scan `~/.agents/skills`.
 Prefer one shared target until a specific agent requires its native personal
 directory.
 
-Use `--dry-run` first when changing targets:
+Use `--dry-run` with an explicit selection when changing targets:
 
 ```sh
-tools/sync-agent-skills --dry-run
+tools/sync-agent-skills --dry-run --all
 ```
 
 ## Agent Notes
