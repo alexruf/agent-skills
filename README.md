@@ -66,6 +66,12 @@ Remove only selected links that point back to this repository:
 tools/unsync-agent-skills
 ```
 
+After moving this checkout, remove stale links from its old location with:
+
+```sh
+tools/unsync-agent-skills --all --prune-dangling
+```
+
 With no skill names or `--all`, non-terminal invocations fail instead of
 silently syncing every skill.
 

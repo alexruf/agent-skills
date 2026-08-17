@@ -12,7 +12,9 @@ Keep skill-specific helpers inside the owning skill directory under `skills/<ski
   `code-review diagnose` for a subset, or use `--all` for unattended bulk sync.
 - `unsync-agent-skills`: Remove only selected target symlinks that point back to
   valid skill directories in this repository. It accepts the same interactive,
-  positional, and `--all` selection modes.
+  positional, and `--all` selection modes. `--prune-dangling` also removes
+  selected broken links that retain a `.../skills/<skill-name>` target after the
+  repository has moved.
 - `test-agent-skill-sync`: Run dependency-free behavioral coverage for selective
   sync and unsync:
 

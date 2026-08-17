@@ -74,6 +74,18 @@ The unsync tool removes only symlinks whose resolved target is a valid skill
 directory in this repository. Skills installed from other repositories or created
 directly in an agent directory are left untouched.
 
+If this repository was moved or deleted before unsyncing, use
+`--prune-dangling` to remove selected broken links whose stored target ends in
+`/skills/<skill-name>`. For example, a broken
+`~/.agents/skills/code-review -> /old/agent-skills/skills/code-review` link is
+removed by:
+
+```sh
+tools/unsync-agent-skills --all --prune-dangling
+```
+
+The option does not remove arbitrary broken links.
+
 ## Custom Targets
 
 Use `--target` for additional or older discovery paths:
