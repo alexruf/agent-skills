@@ -1,7 +1,7 @@
 # Output Format
 
 Every review produces the same report: fill in
-[`assets/report-template.md`](../assets/report-template.md) and output nothing
+[`assets/report-template.md`](assets/report-template.md) and output nothing
 else.
 
 ## Fixed structure
