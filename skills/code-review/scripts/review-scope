@@ -10,14 +10,16 @@ whether one is clear enough to review without asking. Read-only.
 
 Output is tab-separated, one record per line:
   head         current branch, or "detached <sha>"
-  base         base ref used for branch comparisons, or "none"
+  base         "<ref> (<source>)" or "none"; source is --base, origin/HEAD,
+               or guessed (first of origin/main, origin/master, main, master)
   upstream     upstream of the current branch, or "none"
-  candidate    <id> <files> <+added/-removed> <label> <diff command>
+  candidate    <id> <n> files <+added/-removed> <label> <diff command>
   decision     auto | ask <reasons> | empty
   recommended  <candidate id>, or "none"
 
 Candidate ids: stacked, branch, unpushed, uncommitted, staged.
-Diff commands compare against the working tree, except staged (index vs HEAD).
+Diff commands compare against the working tree, except staged (index vs HEAD),
+and end with "-- PATH..." when paths are given.
 Untracked files are counted in the stats of every working-tree candidate (line
 counts cover only the first 500) but must be listed separately with
 git ls-files --others --exclude-standard.
@@ -66,6 +68,18 @@ diff_stat() {
     awk '{ f++; if ($1 != "-") a += $1; if ($2 != "-") r += $2 } END { printf "%d %d %d\n", f, a, r }'
 }
 
+# Prints the number of commits in <range> that touch the paths.
+commits_touching() {
+  git rev-list --count "$1" -- ${paths[@]+"${paths[@]}"}
+}
+
+# Shell-quoted " -- PATH..." suffix for the printed diff commands.
+path_args=""
+for path in ${paths[@]+"${paths[@]}"}; do
+  path_args="$path_args $(printf '%q' "$path")"
+done
+[ -z "$path_args" ] || path_args=" --$path_args"
+
 untracked_files=0
 untracked_lines=0
 max_untracked=500
@@ -89,7 +103,7 @@ add_candidate() {
     label="$label + $untracked_files untracked"
   fi
   [ "$files" -gt 0 ] || return 0
-  records+=("$id"$'\t'"$files files"$'\t'"+$added/-$removed"$'\t'"$label"$'\t'"$cmd")
+  records+=("$id"$'\t'"$files files"$'\t'"+$added/-$removed"$'\t'"$label"$'\t'"$cmd$path_args")
 }
 
 has_candidate() {
@@ -115,7 +129,9 @@ upstream=$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null ||
 base_source="--base"
 if [ -n "$base" ]; then
   git rev-parse --verify --quiet "$base^{commit}" >/dev/null || die "base ref not found: $base"
-elif base=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD); then
+# origin/HEAD dangles after the remote renames its default branch and a prune.
+elif base=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD) &&
+  git rev-parse --verify --quiet "$base^{commit}" >/dev/null; then
   base_source="origin/HEAD"
 else
   base=""
@@ -175,7 +191,7 @@ reasons=()
 
 if [ -n "$base" ] && [ "$on_default" = no ]; then
   base_mb=$(git merge-base HEAD "$base" || true)
-  if [ -n "$base_mb" ] && [ "$(git rev-list --count "$base_mb..HEAD")" -gt 0 ]; then
+  if [ -n "$base_mb" ] && [ "$(commits_touching "$base_mb..HEAD")" -gt 0 ]; then
     add_candidate branch "$(diff_stat "$base_mb")" "$(with_dirty "$head_label vs $base")" "git diff $(short "$base_mb")" yes
 
     # Stacked: another branch shares more history with HEAD than the base does.
@@ -207,24 +223,31 @@ if [ -n "$base" ] && [ "$on_default" = no ]; then
         git rev-parse --verify --quiet "$ref^{commit}" >/dev/null && echo "$ref"
       done
     )
-    if [ -n "$best_ref" ]; then
+    # Only a parent whose own commits touch the paths makes a different diff.
+    if [ -n "$best_ref" ] && [ "$(commits_touching "$base_mb..$best_mb")" -gt 0 ]; then
       add_candidate stacked "$(diff_stat "$best_mb")" "$(with_dirty "$head_label vs $best_ref")" "git diff $(short "$best_mb")" yes
-      reasons+=("branch appears stacked on $best_ref")
+      if has_candidate stacked; then
+        reasons+=("branch appears stacked on $best_ref")
+      fi
     fi
 
-    [ "$dirty" = no ] || reasons+=("branch has commits and uncommitted changes")
+    if [ "$dirty" = yes ] && has_candidate branch; then
+      reasons+=("branch has commits and uncommitted changes")
+    fi
   fi
 fi
 
 if [ "$on_default" = yes ]; then
   compare="${upstream:-$base}"
-  if [ "$compare" != "$head_branch" ] && [ "$(git rev-list --count "$compare..HEAD")" -gt 0 ]; then
+  if [ "$compare" != "$head_branch" ] && [ "$(commits_touching "$compare..HEAD")" -gt 0 ]; then
     ahead=$(git rev-list --count "$compare..HEAD")
     # The merge-base, not the upstream tip, so upstream commits not yet merged
     # locally do not show up as reverse changes.
     unpushed_mb=$(git merge-base HEAD "$compare")
     add_candidate unpushed "$(diff_stat "$unpushed_mb")" "$(with_dirty "$ahead unpushed commit(s) on $head_branch vs $compare")" "git diff $(short "$unpushed_mb")" yes
-    [ "$dirty" = no ] || reasons+=("unpushed commits and uncommitted changes")
+    if [ "$dirty" = yes ] && has_candidate unpushed; then
+      reasons+=("unpushed commits and uncommitted changes")
+    fi
   fi
 fi
 
@@ -240,7 +263,7 @@ fi
 [ -n "$base" ] || reasons+=("no base branch found")
 
 recommended=none
-for id in stacked branch unpushed uncommitted; do
+for id in stacked branch unpushed uncommitted staged; do
   if has_candidate "$id"; then
     recommended="$id"
     break

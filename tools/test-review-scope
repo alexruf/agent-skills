@@ -77,6 +77,34 @@ commit local
 run_scope
 expect 'unpushed commits on main are reviewed automatically' [ "$(field decision)" = auto ]
 expect 'unpushed commits recommend unpushed' [ "$(field recommended)" = unpushed ]
+echo change >>init.txt
+run_scope
+expect 'unpushed commits with uncommitted changes ask' [ "$(field decision)" = ask ]
+expect 'ask names the uncommitted changes' has_text "$(field decision 3)" "uncommitted changes"
+
+# Paths the unpushed commits do not touch: only the uncommitted changes count.
+run_scope -- init.txt 'my file.txt'
+expect 'paths outside the unpushed commits are reviewed automatically' [ "$(field decision)" = auto ]
+expect 'paths outside the unpushed commits drop the unpushed candidate' [ -z "$(candidate unpushed)" ]
+expect 'diff commands carry the quoted paths' has_text "$(candidate uncommitted)" 'git diff HEAD -- init.txt my\ file.txt'
+
+# Dangling origin/HEAD, as after the remote renames master to main: guess the base.
+new_clone dangling
+git symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/master
+git switch -q -c feature
+commit f1
+run_scope
+expect 'dangling origin/HEAD falls back to a guessed base' [ "$(field base)" = "origin/main (guessed)" ]
+expect 'dangling origin/HEAD still reviews the branch' [ "$(field recommended)" = branch ]
+
+# Staged change undone in the working tree: staged is the only candidate.
+new_clone staged
+git switch -q -c feature
+echo change >>init.txt
+git add init.txt
+git show HEAD:init.txt >init.txt
+run_scope
+expect 'staged-only change recommends staged' [ "$(field recommended)" = staged ]
 
 # Default branch behind its upstream: only the local commit is in the diff.
 new_clone diverged
@@ -139,6 +167,12 @@ expect 'stacked branch recommends stacked' [ "$(field recommended)" = stacked ]
 expect 'stacked candidate names the parent' has_text "$(candidate stacked)" "vs parent"
 run_scope --base origin/main
 expect 'explicit --base skips stacked detection' [ -z "$(candidate stacked)" ]
+run_scope -- c1.txt
+expect 'paths the parent does not touch are not stacked' [ -z "$(candidate stacked)" ]
+expect 'paths the parent does not touch are reviewed automatically' [ "$(field decision)" = auto ]
+run_scope -- p1.txt
+expect 'paths only the parent touches are not stacked' [ -z "$(candidate stacked)" ]
+expect 'paths only the parent touches are reviewed automatically' [ "$(field decision)" = auto ]
 
 # Branch checked out from a remote: a later child is not mistaken for a parent.
 new_clone remote-checkout

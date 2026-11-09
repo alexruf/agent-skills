@@ -55,7 +55,8 @@ paths the user gave:
 
 It prints the current branch, the base, one `candidate` line per non-empty scope
 (id, files, +/- lines, label, diff command), a `decision`, and a `recommended`
-candidate. Act on the decision:
+candidate. Diff commands already end with `-- <paths>` when paths were given.
+Act on the decision:
 
 - **`auto`:** review the recommended candidate without asking.
 - **`ask <reasons>`:** ask the user which scope to review before doing anything
@@ -70,6 +71,9 @@ changes, when the default branch has unpushed commits and uncommitted changes,
 when the branch looks stacked on another branch, when HEAD is detached, or when
 no base branch exists. If the helper cannot run, fall back to the explicit
 `uncommitted` or `branch` scope and name the fallback in the report's Scope row.
+For `branch`, take the base from `git symbolic-ref --short refs/remotes/origin/HEAD`
+when it names an existing branch, otherwise the first of `origin/main`, `origin/master`,
+`main`, `master` that exists.
 
 ### Diff details
 
