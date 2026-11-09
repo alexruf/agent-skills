@@ -21,6 +21,12 @@ Keep skill-specific helpers inside the owning skill directory under `skills/<ski
   ```sh
   tools/test-agent-skill-sync
   ```
+- `test-review-scope`: Run fixture-based coverage for the `code-review`
+  skill's `scripts/review-scope` helper (scope candidates and decisions):
+
+  ```sh
+  tools/test-review-scope
+  ```
 - `check`: Run `shellcheck` against all shell scripts under `tools/` and
   `skills/` (excluding `assets/` and `references/`). Run before committing
   changes to any shell script in the repo.

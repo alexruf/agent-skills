@@ -6,7 +6,7 @@ description: >
   a PR, a commit, or a range. Use when the user asks to "review code", "review
   changes", "review my PR", "code review", "check my changes", or "check the comments".
 argument-hint: "[uncommitted | staged | branch | base <ref> | last [n] | commit | range | PR] [-- paths]"
-allowed-tools: Read, Grep, Glob, Bash(*scripts/review-scope*), Bash(git diff *), Bash(git show *), Bash(git log *), Bash(git ls-files *), Bash(git merge-base *), Bash(git rev-parse *), Bash(git symbolic-ref *), Bash(gh pr diff *), Bash(gh pr view *)
+allowed-tools: Read, Grep, Glob, Bash(${CLAUDE_SKILL_DIR}/scripts/review-scope), Bash(${CLAUDE_SKILL_DIR}/scripts/review-scope *), Bash(git diff *), Bash(git show *), Bash(git log *), Bash(git ls-files *), Bash(git merge-base *), Bash(git rev-parse *), Bash(git symbolic-ref *), Bash(gh pr diff *), Bash(gh pr view *)
 ---
 
 # Code Review
@@ -39,8 +39,10 @@ exactly that and do not ask:
 | PR number or URL | `gh pr diff <n>`; description via `gh pr view <n>` |
 | `-- <paths>` | Combines with any of the above to limit the review to those paths |
 
-For `branch` and `base <ref>`, get the merge-base from
-`scripts/review-scope [--base <ref>]` (see below).
+For `branch` and `base <ref>`, run `<skill-dir>/scripts/review-scope [--base <ref>]`
+(see below) and use the diff command of its `branch` candidate, even when
+another candidate is recommended. Without a `branch` candidate, use
+`git merge-base HEAD <base>` with the base the helper printed.
 
 ### Automatic scope
 
@@ -59,7 +61,8 @@ candidate. Act on the decision:
 - **`ask <reasons>`:** ask the user which scope to review before doing anything
   else. Use your question tool if you have one, otherwise a short numbered list.
   Offer each candidate with its label and size, the recommended one first, plus
-  a free-form option for another base, commit, or range. Wait for the answer.
+  a free-form option for another base, commit, or range. When no candidates are
+  listed, give the reasons and offer the free-form option. Wait for the answer.
 - **`empty`:** output the empty-diff report and stop.
 
 The helper asks for a decision when the branch has commits and uncommitted

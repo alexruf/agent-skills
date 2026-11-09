@@ -17,9 +17,14 @@ Output is tab-separated, one record per line:
   recommended  <candidate id>, or "none"
 
 Candidate ids: stacked, branch, unpushed, uncommitted, staged.
-Diff commands compare against the working tree; untracked files are counted in
-the stats of every working-tree candidate but must be listed separately with
+Diff commands compare against the working tree, except staged (index vs HEAD).
+Untracked files are counted in the stats of every working-tree candidate (line
+counts cover only the first 500) but must be listed separately with
 git ls-files --others --exclude-standard.
+
+With --base, the branch candidate always diffs against the merge-base with REF
+and stacked detection is skipped. "ask" may come with no candidates, for
+example when no base branch is found.
 EOF
 }
 
@@ -117,15 +122,16 @@ else
   for ref in origin/main origin/master main master; do
     if git rev-parse --verify --quiet "$ref^{commit}" >/dev/null; then
       base="$ref"
-      base_source="fallback"
+      base_source="guessed"
       break
     fi
   done
 fi
 
 # On the default branch when the current branch is the base itself or its local copy.
+# An explicit --base always gets a branch comparison against that ref instead.
 on_default=no
-if [ -n "$head_branch" ] && [ -n "$base" ]; then
+if [ -n "$head_branch" ] && [ -n "$base" ] && [ "$base_source" != "--base" ]; then
   case "$base" in
     "$head_branch"|*/"$head_branch") on_default=yes ;;
   esac
@@ -145,6 +151,26 @@ with_dirty() {
   fi
 }
 
+# Prints the commit the current branch was created at, or nothing when the reflog
+# does not record a local creation: detached HEAD, expired or missing reflog, or
+# a branch checked out from a remote (its first entry is the remote tip, not the
+# fork point).
+branch_created() {
+  [ -n "$head_branch" ] || return 0
+  local entry subject from
+  entry=$(git reflog show --format='%H %gs' "refs/heads/$head_branch" 2>/dev/null | tail -n 1 || true)
+  subject=${entry#* }
+  case "$subject" in
+    "branch: Created from "*) from=${subject#branch: Created from } ;;
+    *) return 0 ;;
+  esac
+  case "$from" in refs/remotes/*) return 0 ;; esac
+  if git show-ref --verify --quiet "refs/remotes/$from"; then
+    return 0
+  fi
+  echo "${entry%% *}"
+}
+
 reasons=()
 
 if [ -n "$base" ] && [ "$on_default" = no ]; then
@@ -154,18 +180,19 @@ if [ -n "$base" ] && [ "$on_default" = no ]; then
 
     # Stacked: another branch shares more history with HEAD than the base does.
     # A parent's fork point predates the current branch; a fork point after the
-    # branch was created belongs to a child branch and is ignored.
+    # branch was created belongs to a child branch and is ignored. Without a
+    # known creation point, children cannot be told apart, so detection is off.
+    # An explicit --base is the user's choice and is never second-guessed.
     created=""
-    [ -z "$head_branch" ] ||
-      created=$(git reflog show --format=%H "refs/heads/$head_branch" 2>/dev/null | tail -n 1 || true)
+    [ "$base_source" = "--base" ] || created=$(branch_created)
     best_ref="" best_mb="" best_distance=""
-    while IFS= read -r ref; do
+    while [ -n "$created" ] && IFS= read -r ref; do
       [ "$ref" != "$head_branch" ] && [ "$ref" != "$upstream" ] && [ "$ref" != "$base" ] || continue
       case "$base" in */"$ref") continue ;; esac
       ref_mb=$(git merge-base HEAD "$ref" 2>/dev/null || true)
       [ -n "$ref_mb" ] && [ "$ref_mb" != "$base_mb" ] && [ "$ref_mb" != "$head_sha" ] || continue
       git merge-base --is-ancestor "$base_mb" "$ref_mb" || continue
-      [ -z "$created" ] || git merge-base --is-ancestor "$ref_mb" "$created" || continue
+      git merge-base --is-ancestor "$ref_mb" "$created" || continue
       distance=$(git rev-list --count "$ref_mb..HEAD")
       if [ -z "$best_distance" ] || [ "$distance" -lt "$best_distance" ]; then
         best_ref="$ref" best_mb="$ref_mb" best_distance="$distance"
@@ -174,7 +201,8 @@ if [ -n "$base" ] && [ "$on_default" = no ]; then
         best_ref="$best_ref or $ref"
       fi
     done < <(
-      git for-each-ref --format='%(refname:short)' --count=200 refs/heads
+      # Most recently active first, so the cap keeps the likely parents.
+      git for-each-ref --format='%(refname:short)' --sort=-committerdate --count=200 refs/heads
       for ref in origin/develop origin/development origin/dev; do
         git rev-parse --verify --quiet "$ref^{commit}" >/dev/null && echo "$ref"
       done
@@ -192,7 +220,10 @@ if [ "$on_default" = yes ]; then
   compare="${upstream:-$base}"
   if [ "$compare" != "$head_branch" ] && [ "$(git rev-list --count "$compare..HEAD")" -gt 0 ]; then
     ahead=$(git rev-list --count "$compare..HEAD")
-    add_candidate unpushed "$(diff_stat "$compare")" "$(with_dirty "$ahead unpushed commit(s) on $head_branch vs $compare")" "git diff $compare" yes
+    # The merge-base, not the upstream tip, so upstream commits not yet merged
+    # locally do not show up as reverse changes.
+    unpushed_mb=$(git merge-base HEAD "$compare")
+    add_candidate unpushed "$(diff_stat "$unpushed_mb")" "$(with_dirty "$ahead unpushed commit(s) on $head_branch vs $compare")" "git diff $(short "$unpushed_mb")" yes
     [ "$dirty" = no ] || reasons+=("unpushed commits and uncommitted changes")
   fi
 fi
@@ -232,11 +263,13 @@ for record in ${records[@]+"${records[@]}"}; do
   [ "${record%%$'\t'*}" = "$recommended" ] || printf 'candidate\t%s\n' "$record"
 done
 
-if [ "${#records[@]}" -eq 0 ]; then
-  printf 'decision\tempty\n'
-elif [ "${#reasons[@]}" -gt 0 ]; then
+# Reasons win over an empty candidate list: without a base or a branch, an empty
+# list does not mean there is nothing to review.
+if [ "${#reasons[@]}" -gt 0 ]; then
   joined=$(printf '%s; ' "${reasons[@]}")
   printf 'decision\task\t%s\n' "${joined%; }"
+elif [ "${#records[@]}" -eq 0 ]; then
+  printf 'decision\tempty\n'
 else
   printf 'decision\tauto\n'
 fi
