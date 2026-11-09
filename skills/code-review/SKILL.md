@@ -53,7 +53,8 @@ mb=$(git merge-base HEAD "$base")
 - Skip lock files (but see dependencies in the criteria), generated code,
   vendored code, and binaries. **Do not skip migrations**: they are high-risk.
 
-If the diff is empty, say so and stop.
+If the diff is empty, output the empty-diff report from the output format and
+stop.
 
 ## 2. Load context
 
@@ -128,6 +129,8 @@ invent findings to fill the report.
 
 ## 6. Report
 
-Use the format in [references/output-format.md](references/output-format.md):
-findings first by priority, then the verdict and the coverage. Write in the
-user's language; keep code identifiers as they are.
+Fill in [assets/report-template.md](assets/report-template.md) following
+[references/output-format.md](references/output-format.md). The structure is
+fixed on every run: same sections, order, labels, and English field values;
+only the prose follows the user's language. Output the report alone, with no
+preamble or closing remarks.
