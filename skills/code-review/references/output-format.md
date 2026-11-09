@@ -24,8 +24,8 @@ Special cases, each with fixed wording:
 
 | Situation | Output |
 | --- | --- |
-| No findings | Under `## Findings`, write `No findings.` Under `## Next Steps`, write `Nothing to fix.` |
-| Empty diff | Only the heading, then `Nothing to review: <reason>.` |
+| No findings | Under `## Findings`, write `No findings.` Under `## Next Steps`, replace the first line with `Nothing to fix.` and keep the `Different scope:` line. |
+| Empty diff | Only the heading, then `Nothing to review: <reason>.`, then the `Different scope:` line. |
 | No suggestion | Omit the `suggestion` block for that finding; keep `**Fix:**`. |
 | No rule support | Omit the ` · Rule: ...` part of the metadata line. |
 
@@ -90,8 +90,10 @@ section 4 splits into `data-safety` (migrations, destructive operations) and
 
 Fill every row with one line:
 
-- **Scope:** the review mode and refs, for example
-  `origin/main...HEAD + uncommitted + untracked`.
+- **Scope:** the review mode and refs, then how the scope was chosen in
+  parentheses: `auto` (helper decided), `asked` (user picked), `explicit` (named
+  in the request), or `fallback` (helper unavailable). For example
+  `origin/main...HEAD + uncommitted + untracked (auto)`.
 - **Files:** the number of reviewed files and the changed line counts.
 - **Skipped:** each skipped path or pattern with its reason.
 - **Context:** the project rule files and intent sources that were read.
@@ -140,7 +142,7 @@ to batching", "now uses the new cache") rather than the current code.
 
 | Item | Details |
 | --- | --- |
-| Scope | origin/main...HEAD + uncommitted + untracked |
+| Scope | origin/main...HEAD + uncommitted + untracked (auto) |
 | Files | 4 reviewed (+120/-35) |
 | Skipped | package-lock.json (lock file) |
 | Context | AGENTS.md, PR description |
@@ -150,6 +152,8 @@ to batching", "now uses the new cache") rather than the current code.
 ## Next Steps
 
 Reply with finding IDs (for example `F1 F3`) to have them fixed.
+
+Different scope: run the review again with `uncommitted`, `staged`, `branch`, `base <ref>`, `last <n>`, a commit, a range, or a PR.
 ````
 
 Do not apply any fix until the user asks.

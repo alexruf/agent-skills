@@ -24,7 +24,7 @@
 
 | Item | Details |
 | --- | --- |
-| Scope | {{review mode and refs}} |
+| Scope | {{review mode and refs}} ({{auto, asked, explicit, or fallback}}) |
 | Files | {{n}} reviewed (+{{added}}/-{{removed}}) |
 | Skipped | {{path (reason), ... or None}} |
 | Context | {{rule files and intent sources read, or None}} |
@@ -34,3 +34,5 @@
 ## Next Steps
 
 Reply with finding IDs (for example `F1 F3`) to have them fixed.
+
+Different scope: run the review again with `uncommitted`, `staged`, `branch`, `base <ref>`, `last <n>`, a commit, a range, or a PR.

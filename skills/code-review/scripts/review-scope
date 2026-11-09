@@ -1,0 +1,243 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: review-scope [--base REF] [-- PATH...]
+
+List the candidate review scopes for the current git repository and decide
+whether one is clear enough to review without asking. Read-only.
+
+Output is tab-separated, one record per line:
+  head         current branch, or "detached <sha>"
+  base         base ref used for branch comparisons, or "none"
+  upstream     upstream of the current branch, or "none"
+  candidate    <id> <files> <+added/-removed> <label> <diff command>
+  decision     auto | ask <reasons> | empty
+  recommended  <candidate id>, or "none"
+
+Candidate ids: stacked, branch, unpushed, uncommitted, staged.
+Diff commands compare against the working tree; untracked files are counted in
+the stats of every working-tree candidate but must be listed separately with
+git ls-files --others --exclude-standard.
+EOF
+}
+
+die() {
+  echo "review-scope: $*" >&2
+  exit 2
+}
+
+base=""
+paths=()
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --base)
+      [ "$#" -ge 2 ] || die "--base needs a ref"
+      base="$2"
+      shift 2
+      ;;
+    --)
+      shift
+      paths=("$@")
+      break
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      die "unknown argument: $1 (see --help)"
+      ;;
+  esac
+done
+
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "not inside a git work tree"
+git rev-parse --verify --quiet HEAD >/dev/null || die "repository has no commits yet"
+
+# Prints "<files> <added> <removed>" for `git diff <args>`; binary files count as 0 lines.
+diff_stat() {
+  git diff --numstat "$@" -- ${paths[@]+"${paths[@]}"} |
+    awk '{ f++; if ($1 != "-") a += $1; if ($2 != "-") r += $2 } END { printf "%d %d %d\n", f, a, r }'
+}
+
+untracked_files=0
+untracked_lines=0
+max_untracked=500
+while IFS= read -r -d '' file; do
+  untracked_files=$((untracked_files + 1))
+  [ "$untracked_files" -le "$max_untracked" ] || continue
+  lines=$(git diff --no-index --numstat -- /dev/null "$file" 2>/dev/null | awk '$1 != "-" { print $1 }' || true)
+  untracked_lines=$((untracked_lines + ${lines:-0}))
+done < <(git ls-files -z --others --exclude-standard -- ${paths[@]+"${paths[@]}"})
+
+records=()
+
+# add_candidate <id> <stat> <label> <diff command> <include untracked: yes|no>
+add_candidate() {
+  local id="$1" stat="$2" label="$3" cmd="$4" with_untracked="$5"
+  local files added removed
+  read -r files added removed <<<"$stat"
+  if [ "$with_untracked" = yes ] && [ "$untracked_files" -gt 0 ]; then
+    files=$((files + untracked_files))
+    added=$((added + untracked_lines))
+    label="$label + $untracked_files untracked"
+  fi
+  [ "$files" -gt 0 ] || return 0
+  records+=("$id"$'\t'"$files files"$'\t'"+$added/-$removed"$'\t'"$label"$'\t'"$cmd")
+}
+
+has_candidate() {
+  local record
+  for record in ${records[@]+"${records[@]}"}; do
+    [ "${record%%$'\t'*}" = "$1" ] && return 0
+  done
+  return 1
+}
+
+head_sha=$(git rev-parse HEAD)
+short() { git rev-parse --short "$1"; }
+
+if head_branch=$(git symbolic-ref --quiet --short HEAD); then
+  head_label="$head_branch"
+else
+  head_branch=""
+  head_label="detached $(short HEAD)"
+fi
+
+upstream=$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)
+
+base_source="--base"
+if [ -n "$base" ]; then
+  git rev-parse --verify --quiet "$base^{commit}" >/dev/null || die "base ref not found: $base"
+elif base=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD); then
+  base_source="origin/HEAD"
+else
+  base=""
+  for ref in origin/main origin/master main master; do
+    if git rev-parse --verify --quiet "$ref^{commit}" >/dev/null; then
+      base="$ref"
+      base_source="fallback"
+      break
+    fi
+  done
+fi
+
+# On the default branch when the current branch is the base itself or its local copy.
+on_default=no
+if [ -n "$head_branch" ] && [ -n "$base" ]; then
+  case "$base" in
+    "$head_branch"|*/"$head_branch") on_default=yes ;;
+  esac
+fi
+
+dirty_stat=$(diff_stat HEAD)
+dirty=no
+if [ "${dirty_stat%% *}" -gt 0 ] || [ "$untracked_files" -gt 0 ]; then
+  dirty=yes
+fi
+# Appends "+ uncommitted" when tracked files have changes; untracked files are labeled separately.
+with_dirty() {
+  if [ "${dirty_stat%% *}" -gt 0 ]; then
+    echo "$1 + uncommitted"
+  else
+    echo "$1"
+  fi
+}
+
+reasons=()
+
+if [ -n "$base" ] && [ "$on_default" = no ]; then
+  base_mb=$(git merge-base HEAD "$base" || true)
+  if [ -n "$base_mb" ] && [ "$(git rev-list --count "$base_mb..HEAD")" -gt 0 ]; then
+    add_candidate branch "$(diff_stat "$base_mb")" "$(with_dirty "$head_label vs $base")" "git diff $(short "$base_mb")" yes
+
+    # Stacked: another branch shares more history with HEAD than the base does.
+    # A parent's fork point predates the current branch; a fork point after the
+    # branch was created belongs to a child branch and is ignored.
+    created=""
+    [ -z "$head_branch" ] ||
+      created=$(git reflog show --format=%H "refs/heads/$head_branch" 2>/dev/null | tail -n 1 || true)
+    best_ref="" best_mb="" best_distance=""
+    while IFS= read -r ref; do
+      [ "$ref" != "$head_branch" ] && [ "$ref" != "$upstream" ] && [ "$ref" != "$base" ] || continue
+      case "$base" in */"$ref") continue ;; esac
+      ref_mb=$(git merge-base HEAD "$ref" 2>/dev/null || true)
+      [ -n "$ref_mb" ] && [ "$ref_mb" != "$base_mb" ] && [ "$ref_mb" != "$head_sha" ] || continue
+      git merge-base --is-ancestor "$base_mb" "$ref_mb" || continue
+      [ -z "$created" ] || git merge-base --is-ancestor "$ref_mb" "$created" || continue
+      distance=$(git rev-list --count "$ref_mb..HEAD")
+      if [ -z "$best_distance" ] || [ "$distance" -lt "$best_distance" ]; then
+        best_ref="$ref" best_mb="$ref_mb" best_distance="$distance"
+      elif [ "$distance" -eq "$best_distance" ] && [ "$ref_mb" = "$best_mb" ]; then
+        # Same fork point, same diff: name every branch that fits.
+        best_ref="$best_ref or $ref"
+      fi
+    done < <(
+      git for-each-ref --format='%(refname:short)' --count=200 refs/heads
+      for ref in origin/develop origin/development origin/dev; do
+        git rev-parse --verify --quiet "$ref^{commit}" >/dev/null && echo "$ref"
+      done
+    )
+    if [ -n "$best_ref" ]; then
+      add_candidate stacked "$(diff_stat "$best_mb")" "$(with_dirty "$head_label vs $best_ref")" "git diff $(short "$best_mb")" yes
+      reasons+=("branch appears stacked on $best_ref")
+    fi
+
+    [ "$dirty" = no ] || reasons+=("branch has commits and uncommitted changes")
+  fi
+fi
+
+if [ "$on_default" = yes ]; then
+  compare="${upstream:-$base}"
+  if [ "$compare" != "$head_branch" ] && [ "$(git rev-list --count "$compare..HEAD")" -gt 0 ]; then
+    ahead=$(git rev-list --count "$compare..HEAD")
+    add_candidate unpushed "$(diff_stat "$compare")" "$(with_dirty "$ahead unpushed commit(s) on $head_branch vs $compare")" "git diff $compare" yes
+    [ "$dirty" = no ] || reasons+=("unpushed commits and uncommitted changes")
+  fi
+fi
+
+add_candidate uncommitted "$dirty_stat" "uncommitted changes" "git diff HEAD" yes
+
+staged_stat=$(diff_stat --cached)
+unstaged_stat=$(diff_stat)
+if [ "${staged_stat%% *}" -gt 0 ] && { [ "${unstaged_stat%% *}" -gt 0 ] || [ "$untracked_files" -gt 0 ]; }; then
+  add_candidate staged "$staged_stat" "staged changes only" "git diff --cached" no
+fi
+
+[ -n "$head_branch" ] || reasons+=("HEAD is detached")
+[ -n "$base" ] || reasons+=("no base branch found")
+
+recommended=none
+for id in stacked branch unpushed uncommitted; do
+  if has_candidate "$id"; then
+    recommended="$id"
+    break
+  fi
+done
+
+printf 'head\t%s\n' "$head_label"
+if [ -n "$base" ]; then
+  printf 'base\t%s (%s)\n' "$base" "$base_source"
+else
+  printf 'base\tnone\n'
+fi
+printf 'upstream\t%s\n' "${upstream:-none}"
+
+# Recommended candidate first, the rest in discovery order.
+for record in ${records[@]+"${records[@]}"}; do
+  [ "${record%%$'\t'*}" = "$recommended" ] && printf 'candidate\t%s\n' "$record"
+done
+for record in ${records[@]+"${records[@]}"}; do
+  [ "${record%%$'\t'*}" = "$recommended" ] || printf 'candidate\t%s\n' "$record"
+done
+
+if [ "${#records[@]}" -eq 0 ]; then
+  printf 'decision\tempty\n'
+elif [ "${#reasons[@]}" -gt 0 ]; then
+  joined=$(printf '%s; ' "${reasons[@]}")
+  printf 'decision\task\t%s\n' "${joined%; }"
+else
+  printf 'decision\tauto\n'
+fi
+printf 'recommended\t%s\n' "$recommended"
